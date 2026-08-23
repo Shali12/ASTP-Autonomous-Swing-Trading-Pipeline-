@@ -1,0 +1,17 @@
+{
+  "last_cycle": "2026-08-23",
+  "changes": [
+    {
+      "date": "2026-06-01",
+      "description": "Tightened BUY_B RSI threshold from 75 to 65",
+      "filter": "rsi_lt_65",
+      "expected_impact": "Improve BUY_B win rate by filtering out overbought entries"
+    },
+    {
+      "date": "2026-06-01",
+      "description": "Added volume ratio filter for low-volatility breakout setups",
+      "filter": "vol_lt_2",
+      "expected_impact": "Improve win rate by filtering high-vol breakouts that fail"
+    }
+  ]
+}
