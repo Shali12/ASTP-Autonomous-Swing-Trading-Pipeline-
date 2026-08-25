@@ -2,20 +2,20 @@
 
 An autonomous AI-agent-driven pipeline that screens S&P 500 / Nasdaq 100 / S&P 400 stocks daily, logs confirmed swing-trading signals, tracks T+2/T+5/T+10 performance, and self-validates strategy improvements every 48 hours.
 
-## Results (672 Completed Signals)
+## Results (683 Completed Signals)
 
 | Metric | T+2 | T+5 | T+10 |
 |--------|-----|-----|------|
-| Win Rate | 60.4% | 62.1% | 60.3% |
-| Avg Win | +3.27% | +4.61% | +6.25% |
-| Avg Loss | -3.00% | -3.98% | -5.94% |
-| Profit Factor | 1.09 | 1.16 | 1.05 |
+| Win Rate | 60.8% | 62.2% | 60.3% |
+| Avg Win | +3.29% | +4.64% | +6.24% |
+| Avg Loss | -3.04% | -3.98% | -6.00% |
+| Profit Factor | 1.08 | 1.17 | 1.04 |
 
 ### By Setup (T+10)
 | Setup | n | Win Rate | Avg Win | Avg Loss |
 |-------|---|----------|---------|----------|
-| BUY_A (Mean Reversion) | 93 | 69.9% | +7.72% | -6.66% |
-| BUY_B (Breakout) | 579 | 58.7% | +5.97% | -5.86% |
+| BUY_A (Mean Reversion) | 94 | 69.1% | +7.72% | -6.62% |
+| BUY_B (Breakout) | 589 | 58.9% | +5.96% | -5.93% |
 
 ### By RSI Range (T+10)
 | RSI Range | n | Win Rate |
