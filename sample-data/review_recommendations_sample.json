@@ -12,6 +12,12 @@
       "description": "Added volume ratio filter for low-volatility breakout setups",
       "filter": "vol_lt_2",
       "expected_impact": "Improve win rate by filtering high-vol breakouts that fail"
+    },
+    {
+      "date": "2026-01-25",
+      "description": "Sample: skip divergence-flagged breakouts in Setup B",
+      "filter": "div_skip",
+      "expected_impact": "Sample entry dated mid-dataset so users see a real verdict from the validation script"
     }
   ]
 }
