@@ -8,11 +8,12 @@ Usage:
   python3 tracker.py summary
   python3 tracker.py delete-row --ticker AAPL --date 2026-01-15
 
-Modes:
-  log        — Add a new signal to the tracker
-  update     — Fetch T+2/T+5/T+10 returns via yfinance for signals due for update
-  summary    — Print weekly performance summary (win rate, avg win/loss, profit factor)
-  delete-row — Remove a specific signal by ticker + date
+Configuration (optional):
+  SIGNAL_TRACKER_FILE  path to SignalTracker.md (default: SignalTracker.md)
+
+The tracker table has 16 columns (Signal Date .. Catalyst). log_signal
+dedupes: the same ticker is skipped within 10 trading days, so re-running
+the daily brief never duplicates rows.
 
 Requirements:
   pip install pandas numpy yfinance
@@ -25,62 +26,102 @@ import datetime
 import os
 import sys
 
-# Configurable path — defaults to current directory
 TRACKER_FILE = os.environ.get("SIGNAL_TRACKER_FILE", "SignalTracker.md")
 
 
 def _find_table(lines):
-    """Find the header row index in a markdown table that may have a preamble."""
+    """Return the index of the markdown table header row (the one starting
+    with '|' and containing a Date/Ticker column). Returns None if not found.
+    This makes the parser resilient to changelog/notes lines prepended above
+    the table."""
     for i, line in enumerate(lines):
-        s = line.strip()
-        if s.startswith("|") and ("Date" in s or "Ticker" in s or "Signal Date" in s):
-            return i
+            s = line.strip()
+            if s.startswith("|") and ("Date" in s or "Ticker" in s or "Signal Date" in s):
+                return i
     return None
 
 
 def initialize_tracker():
-    """Create the tracker file if it doesn't exist."""
     if not os.path.exists(TRACKER_FILE):
-        os.makedirs(os.path.dirname(TRACKER_FILE) if os.path.dirname(TRACKER_FILE) else ".", exist_ok=True)
-        header = "| Date | Ticker | Setup | Rank | Entry Price | RSI | Vol Ratio | Divergence | PEAD | Insider | 200SMA_Near | T+2 | T+5 | T+10 | Outcome |\n"
-        header += "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
+        os.makedirs(os.path.dirname(TRACKER_FILE), exist_ok=True)
+        header = "| Signal Date | Ticker | Setup | Rank | Entry Price | RSI | Vol Ratio | Divergence | PEAD | Insider | 200SMA_Near | T+2 | T+5 | T+10 | Outcome | Catalyst |\n"
+        header += "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n"
         with open(TRACKER_FILE, "w") as f:
             f.write(header + "\n")
+    else:
+        # If file exists, ensure header includes Catalyst column
+        with open(TRACKER_FILE, "r") as f:
+            lines = f.readlines()
+        hidx = _find_table(lines)
+        if hidx is not None:
+            header_line = lines[hidx].strip()
+            if "Catalyst" not in header_line:
+                # Insert Catalyst column before the final closing pipe
+                # Assuming header ends with "| Outcome |"
+                # We'll replace "| Outcome |" with "| Outcome | Catalyst |"
+                new_header = header_line.rstrip("|") + " Catalyst |\n"
+                lines[hidx] = new_header
+                # Also need to add a separator line for the new column
+                sep_idx = hidx + 1
+                if sep_idx < len(lines):
+                    sep_line = lines[sep_idx].strip()
+                    # Add an extra --- for the new column
+                    new_sep = sep_line + " --- |\n"
+                    lines[sep_idx] = new_sep
+                # For each data row, add an empty field at the end
+                for i in range(hidx + 2, len(lines)):
+                    line = lines[i].rstrip("\n")
+                    if line.strip() == "":
+                        continue
+                    # Ensure line starts and ends with pipe
+                    if line.startswith("|") and line.endswith("|"):
+                        parts = line.split("|")
+                        if len(parts) >= 2:
+                            parts = parts[:-1] + [""] + parts[-1:]
+                            lines[i] = "|".join(parts) + "\n"
+                        else:
+                            lines[i] = line + " |\n"
+                    else:
+                        lines[i] = line + " |\n"
+                with open(TRACKER_FILE, "w") as f:
+                    f.writelines(lines)
+                print("Updated SignalTracker header to include Catalyst column.")
 
 
-def log_signal(ticker, setup, rank, entry, rsi, vol_ratio, divergence, pead="N", insider="N", sma_near="N"):
-    """Log a new swing trading signal."""
+def log_signal(ticker, setup, rank, entry, rsi, vol_ratio, divergence, pead="N", insider="N", sma_near="N", catalyst=""):
     initialize_tracker()
 
+    # Validation: Prevent logging NaN or zero prices
     if entry is None or pd.isna(entry) or entry <= 0:
-        print(f"Warning: Invalid entry price ({entry}) for {ticker}. Skipping.")
+        print(f"⚠️ Warning: Invalid entry price ({entry}) for {ticker}. Skipping log.")
         return
 
-    # Check for duplicate within 10 trading days
-    with open(TRACKER_FILE, "r") as f:
-        lines = f.readlines()
+    # Check for existing signals within 10 trading days
+    if os.path.exists(TRACKER_FILE):
+        with open(TRACKER_FILE, "r") as f:
+            lines = f.readlines()
 
     hidx = _find_table(lines)
-    if hidx is not None and len(lines) > hidx + 2:
-        for row in reversed(lines[hidx + 2:]):
+    if len(lines) > 2 and hidx is not None:
+        rows = lines[hidx + 2:]
+        for row in reversed(rows):  # Check newest first
             cols = [c.strip() for c in row.split('|')[1:-1]]
             if len(cols) < 2:
                 continue
-            if cols[1] == ticker:
-                try:
-                    sig_date = np.datetime64(cols[0])
-                    days_elapsed = np.busday_count(sig_date, np.datetime64('today'))
-                    if days_elapsed < 10:
-                        print(f"Skipping {ticker} — duplicate within 10 trading days.")
-                        return
-                except:
-                    pass
-                break
+
+            row_ticker = cols[1]
+            if row_ticker == ticker:
+                sig_date = np.datetime64(cols[0])
+                today = np.datetime64('today')
+                days_elapsed = np.busday_count(sig_date, today)
+                if days_elapsed < 10:
+                    return  # Skip silently
+                break  # Found most recent, no need to check further back
 
     date_str = datetime.datetime.now().strftime("%Y-%m-%d")
     div_str = "Yes" if divergence else "No"
 
-    row = f"| {date_str} | {ticker} | {setup} | {rank} | ${entry:.2f} | {rsi:.2f} | {vol_ratio:.2f}x | {div_str} | {pead} | {insider} | {sma_near} | | | | |\n"
+    row = f"| {date_str} | {ticker} | {setup} | {rank} | ${entry:.2f} | {rsi:.2f} | {vol_ratio:.2f}x | {div_str} | {pead} | {insider} | {sma_near} | | | | | {catalyst} |\n"
 
     with open(TRACKER_FILE, "a") as f:
         f.write(row)
@@ -88,7 +129,7 @@ def log_signal(ticker, setup, rank, entry, rsi, vol_ratio, divergence, pead="N",
 
 
 def delete_row(ticker, date_str):
-    """Remove a specific signal row by ticker and date."""
+    """Removes a specific signal row based on ticker and date."""
     if not os.path.exists(TRACKER_FILE):
         print("SignalTracker.md not found.")
         return
@@ -96,40 +137,48 @@ def delete_row(ticker, date_str):
     with open(TRACKER_FILE, "r") as f:
         lines = f.readlines()
 
+    updated_lines = []
+    row_deleted = False
+
+    # Keep preamble (changelog) + header + separator, filter the rest
     hidx = _find_table(lines) or 0
-    updated = lines[:hidx + 2]
-    deleted = False
+    updated_lines.extend(lines[:hidx + 2])
 
     for line in lines[hidx + 2:]:
-        stripped = line.strip()
-        if not stripped:
+        line = line.strip()
+        if not line:
             continue
-        cols = [c.strip() for c in stripped.split('|')[1:-1]]
+
+        cols = [c.strip() for c in line.split('|')[1:-1]]
         if len(cols) < 2:
             continue
-        if cols[0] == date_str and cols[1] == ticker:
-            deleted = True
-            continue
-        updated.append(line)
 
-    if deleted:
+        # Date is col 0, Ticker is col 1
+        if cols[0] == date_str and cols[1] == ticker:
+            row_deleted = True
+            continue  # Skip this row
+
+        updated_lines.append(line + "\n")
+
+    if row_deleted:
         with open(TRACKER_FILE, "w") as f:
-            f.writelines(updated)
-        print(f"Deleted row for {ticker} on {date_str}")
+            f.write("".join(updated_lines))
+        print(f"Successfully deleted row for {ticker} on {date_str}")
     else:
-        print(f"No matching row for {ticker} on {date_str}")
+        print(f"No matching row found for {ticker} on {date_str}")
 
 
 def update_signals():
-    """Fetch T+2/T+5/T+10 returns for signals that are due."""
     initialize_tracker()
     with open(TRACKER_FILE, "r") as f:
         lines = f.readlines()
 
+    if len(lines) <= 2:  # Header only
+        return
+
     hidx = _find_table(lines)
     if hidx is None:
         return
-
     preamble = lines[:hidx]
     header = lines[hidx]
     separator = lines[hidx + 1] if hidx + 1 < len(lines) else ""
@@ -137,6 +186,7 @@ def update_signals():
 
     updated_rows = []
     changed = False
+
     today = np.datetime64('today')
 
     for row in body:
@@ -145,11 +195,12 @@ def update_signals():
         if not stripped:
             updated_rows.append(raw)
             continue
-
         cols = [c.strip() for c in stripped.split('|')[1:-1]]
+        # Skip the markdown separator row
         if cols and all(c in ('', '-', ':') for c in cols):
             updated_rows.append(raw)
             continue
+        # Skip the header row itself
         if cols and cols[0].lower() in ('date', 'signal date'):
             updated_rows.append(raw)
             continue
@@ -157,75 +208,89 @@ def update_signals():
             updated_rows.append(raw)
             continue
 
+        # Cols: 0:Date, 1:Ticker, 2:Setup, 3:Rank, 4:Entry Price, 5:RSI, 6:Vol Ratio, 7:Divergence, 8:PEAD, 9:Insider, 10:200SMA_Near, 11:T+2, 12:T+5, 13:T+10, 14:Outcome, 15:Catalyst
+        # Note: we added Catalyst at index 15
+
+        sig_date = np.datetime64(cols[0])
+        ticker = cols[1]
         try:
-            sig_date = np.datetime64(cols[0])
-            ticker = cols[1]
             entry_price = float(cols[4].replace('$', ''))
         except (ValueError, IndexError):
             updated_rows.append("| " + " | ".join(cols) + " |")
             continue
 
+        # Calculate trading days elapsed
         days_elapsed = np.busday_count(sig_date, today)
 
-        # T+2 (index 11)
+        # Update T+2 (index 11)
         if days_elapsed >= 1 and not cols[11]:
             try:
                 df = yf.download(ticker, start=str(sig_date), progress=False)
                 if len(df) >= 3:
-                    price = df['Close'].iloc[2]
-                    if isinstance(price, pd.Series):
-                        price = price.iloc[0]
-                    ret = ((price - entry_price) / entry_price) * 100
-                    cols[11] = f"{ret:+.2f}%" if -50 <= ret <= 50 else "DATA_ERROR"
+                    price_t2 = df['Close'].iloc[2]
+                    if isinstance(price_t2, pd.Series):
+                        price_t2 = price_t2.iloc[0]
+                    ret = ((price_t2 - entry_price) / entry_price) * 100
+                    if -50 <= ret <= 50:
+                        cols[11] = f"{ret:+.2f}%"
+                    else:
+                        cols[11] = "DATA_ERROR"
                     changed = True
             except Exception as e:
-                print(f"Error T+2 for {ticker}: {e}")
+                print(f"Error updating T+2 for {ticker}: {e}")
 
-        # T+5 (index 12)
+        # Update T+5 (index 12)
         if days_elapsed >= 4 and not cols[12]:
             try:
                 df = yf.download(ticker, start=str(sig_date), progress=False)
                 if len(df) >= 6:
-                    price = df['Close'].iloc[5]
-                    if isinstance(price, pd.Series):
-                        price = price.iloc[0]
-                    ret = ((price - entry_price) / entry_price) * 100
-                    cols[12] = f"{ret:+.2f}%" if -50 <= ret <= 50 else "DATA_ERROR"
+                    price_t5 = df['Close'].iloc[5]
+                    if isinstance(price_t5, pd.Series):
+                        price_t5 = price_t5.iloc[0]
+                    ret = ((price_t5 - entry_price) / entry_price) * 100
+                    if -50 <= ret <= 50:
+                        cols[12] = f"{ret:+.2f}%"
+                    else:
+                        cols[12] = "DATA_ERROR"
                     changed = True
             except Exception as e:
-                print(f"Error T+5 for {ticker}: {e}")
+                print(f"Error updating T+5 for {ticker}: {e}")
 
-        # T+10 (index 13)
+        # Update T+10 (index 13)
         if days_elapsed >= 9 and not cols[13]:
             try:
                 df = yf.download(ticker, start=str(sig_date), progress=False)
                 if len(df) >= 11:
-                    price = df['Close'].iloc[10]
-                    if isinstance(price, pd.Series):
-                        price = price.iloc[0]
-                    ret = ((price - entry_price) / entry_price) * 100
+                    price_t10 = df['Close'].iloc[10]
+                    if isinstance(price_t10, pd.Series):
+                        price_t10 = price_t10.iloc[0]
+                    ret = ((price_t10 - entry_price) / entry_price) * 100
                     if -50 <= ret <= 50:
                         cols[13] = f"{ret:+.2f}%"
-                        cols[14] = f"{'WIN' if ret > 0 else 'LOSS'} ({ret:+.2f}%)"
+                        # Mark Outcome (index 14)
+                        outcome_str = "WIN" if ret > 0 else "LOSS"
+                        cols[14] = f"{outcome_str} ({ret:+.2f}%)"
                     else:
                         cols[13] = "DATA_ERROR"
                         cols[14] = ""
                     changed = True
             except Exception as e:
-                print(f"Error T+10 for {ticker}: {e}")
+                print(f"Error updating T+10 for {ticker}: {e}")
 
         updated_rows.append("| " + " | ".join(cols) + " |")
 
     if changed:
+        preamble_text = "".join(preamble)
+        header_text = header.rstrip("\n")
+        sep_text = separator.rstrip("\n")
         with open(TRACKER_FILE, "w") as f:
-            f.write("".join(preamble) + header.rstrip("\n") + "\n" + separator.rstrip("\n") + "\n" + "\n".join(updated_rows) + "\n")
+            f.write(preamble_text + header_text + "\n" + sep_text + "\n" + "\n".join(updated_rows) + "\n")
         print("Updated signal performance metrics.")
     else:
         print("No signals ready for update.")
 
 
 def summary_signals():
-    """Print a performance summary of completed signals."""
     if not os.path.exists(TRACKER_FILE):
         print("No SignalTracker.md found.")
         return
@@ -233,61 +298,69 @@ def summary_signals():
     with open(TRACKER_FILE, "r") as f:
         lines = f.readlines()
 
-    hidx = _find_table(lines)
-    if hidx is None:
-        print("No table found.")
+    if len(lines) <= 2:
+        print("No signals logged yet.")
         return
 
-    total = 0
-    completed = []
+    rows = lines[(_find_table(lines) or 0) + 2:]
+    total_signals = 0
+    completed_signals = []  # List of (ticker, return_pct)
 
-    for row in lines[hidx + 2:]:
+    for row in rows:
         row = row.strip()
         if not row:
             continue
         cols = [c.strip() for c in row.split('|')[1:-1]]
-        if len(cols) < 15 or (cols and cols[0].lower() == 'date'):
+        if len(cols) < 15:
             continue
-        total += 1
-        t10 = cols[13]
-        if t10 and '%' in t10:
+        if cols and cols[0].lower() == 'date':
+            continue
+
+        total_signals += 1
+        t10_val = cols[13]
+        if t10_val and '%' in t10_val:
             try:
-                completed.append((cols[1], float(t10.replace('%', ''))))
+                ret_pct = float(t10_val.replace('%', ''))
+                completed_signals.append((cols[1], ret_pct))
             except ValueError:
                 continue
 
-    n = len(completed)
-    if n == 0:
-        print(f"No completed signals yet. {total} signals being tracked.")
+    completed_count = len(completed_signals)
+    if completed_count == 0:
+        print(f"No completed signals yet. {total_signals} signals being tracked.")
         return
 
-    wins = [r for _, r in completed if r > 0]
-    losses = [r for _, r in completed if r <= 0]
-    wr = len(wins) / n * 100
-    avg_w = np.mean(wins) if wins else 0
-    avg_l = np.mean(losses) if losses else 0
-    pf = abs(avg_w) / abs(avg_l) if avg_l != 0 else float('inf')
-    best = max(completed, key=lambda x: x[1])
-    worst = min(completed, key=lambda x: x[1])
+    wins = [ret for ticker, ret in completed_signals if ret > 0]
+    losses = [ret for ticker, ret in completed_signals if ret <= 0]
 
-    print(f"""
-SIGNAL SUMMARY
-{'-'*40}
-Total Signals:  {total}
-Completed (T+10): {n}
-Win Rate:       {wr:.1f}%
-Avg Win:        {avg_w:+.2f}%
-Avg Loss:       {avg_l:+.2f}%
-Profit Factor:  {pf:.2f}
-Best:           {best[0]} ({best[1]:+.2f}%)
-Worst:          {worst[0]} ({worst[1]:+.2f}%)
-{'-'*40}
-""")
+    win_rate = (len(wins) / completed_count) * 100
+    avg_win = np.mean(wins) if wins else 0
+    avg_loss = np.mean(losses) if losses else 0
+    profit_factor = abs(avg_win) / abs(avg_loss) if avg_loss != 0 else float('inf')
+
+    best_signal = max(completed_signals, key=lambda x: x[1])
+    worst_signal = min(completed_signals, key=lambda x: x[1])
+
+    summary = [
+        "📊 WEEKLY SIGNAL SUMMARY",
+        "-------------------------",
+        f"Total Signals Logged: {total_signals}",
+        f"Completed (T+10):    {completed_count}",
+        f"Win Rate:            {win_rate:.2f}%",
+        f"Avg Win:             {avg_win:+.2f}%",
+        f"Avg Loss:            {avg_loss:+.2f}%",
+        f"Profit Factor:       {profit_factor:.2f}",
+        f"Best Signal:         {best_signal[0]} ({best_signal[1]:+.2f}%)",
+        f"Worst Signal:        {worst_signal[0]} ({worst_signal[1]:+.2f}%)",
+        "-------------------------"
+    ]
+
+    print("\n".join(summary))
 
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Swing trading signal tracker")
+    parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["log", "update", "summary", "delete-row"])
     parser.add_argument("--ticker")
     parser.add_argument("--setup")
@@ -299,18 +372,20 @@ if __name__ == "__main__":
     parser.add_argument("--pead", type=str, default="N")
     parser.add_argument("--insider", type=str, default="N")
     parser.add_argument("--sma_near", type=str, default="N")
+    parser.add_argument("--catalyst", type=str, default="")
     parser.add_argument("--date", type=str)
+
     args = parser.parse_args()
 
     if args.mode == "log":
         div_bool = args.div.lower() == "true" if args.div else False
-        log_signal(args.ticker, args.setup, args.rank, args.entry, args.rsi, args.vol, div_bool, args.pead, args.insider, args.sma_near)
+        log_signal(args.ticker, args.setup, args.rank, args.entry, args.rsi, args.vol, div_bool, args.pead, args.insider, args.sma_near, args.catalyst)
     elif args.mode == "update":
         update_signals()
     elif args.mode == "summary":
         summary_signals()
     elif args.mode == "delete-row":
         if not args.ticker or not args.date:
-            print("Error: --ticker and --date required for delete-row")
+            print("Error: --ticker and --date are required for delete-row mode.")
             sys.exit(1)
         delete_row(args.ticker, args.date)
