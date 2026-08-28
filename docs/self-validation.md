@@ -70,6 +70,29 @@ The `review_validation.py` script:
    - If `post_wr <= pre_wr + 2.0` → status: `no_improvement`, action: `revert`
    - If either group has `< 15` signals → status: `insufficient_sample`, action: `N/A`
 
+## Tracking Progress Daily
+
+Waiting for 15+ completed signals used to be a black box. The watcher
+script makes it observable:
+
+```bash
+python3 scripts/validation_progress.py
+```
+
+For every pending change it counts post-change signals (logged vs
+completed through T+10), shows the T+10 completion window for the current
+cohort, and prints ONLY when something changed:
+
+- **baseline** — first run establishes the tracked state
+- **progress** — new post-change signals logged or completed
+- **STAGNATION ALERT** — no new post-change signal for 3+ trading days
+- **VALIDATION READY** — a change reached 15+ completed signals; the next
+  48h cycle will issue a real keep/revert verdict
+
+Missing input files exit non-zero (so a cron job alerts instead of
+silently tracking nothing). In production this runs as a daily cron; the
+real milestone history is kept in `results/validation-progress-*.md`.
+
 ## Why This Matters
 
 This is the difference between:

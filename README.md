@@ -89,9 +89,11 @@ autonomous-swing-trading-pipeline/
 │   ├── daily_premarket_report.py      ← Pre-market futures/sectors/sentiment report
 │   ├── retrospective_analysis.py      ← Pattern analysis by setup/RSI/volume
 │   ├── review_validation.py           ← Self-validating improvement cycle
-│   └── health_check.py                ← Automated pipeline quality checks
+│   ├── health_check.py                ← Automated pipeline quality checks
+│   └── validation_progress.py         ← Tracks self-validation readiness daily
 ├── tests/
 │   └── test_health_fixes.py           ← 23 hermetic regression tests (no network)
+│   └── test_validation_progress.py    ← Watcher tests (8)
 ├── docs/
 │   ├── pipeline-design.md             ← How the cron jobs fit together
 │   ├── signal-tracker.md              ← How T+2/T+5/T+10 tracking works
@@ -100,7 +102,8 @@ autonomous-swing-trading-pipeline/
 │   ├── SignalTracker_sample.md        ← 43 fake signals for testing
 │   └── review_recommendations_sample.json  ← Sample recommendations
 └── results/
-    └── backtest-2026-08-28.md         ← Latest retrospective output
+    ├── backtest-2026-08-28.md         ← Latest retrospective output
+    └── validation-progress-2026-08-28.md ← Self-validation audit trail
 ```
 
 ---
@@ -125,6 +128,12 @@ python3 scripts/review_validation.py \
 
 # 5. Run the test suite
 python3 tests/test_health_fixes.py
+python3 tests/test_validation_progress.py
+
+# 6. See the self-validation progress demo (sample data)
+SIGNAL_TRACKER_FILE=sample-data/SignalTracker_sample.md \
+REVIEW_RECOMMENDATIONS_FILE=sample-data/review_recommendations_sample.json \
+python3 scripts/validation_progress.py
 ```
 
 ---
@@ -155,6 +164,22 @@ Most trading systems backtest once and then blindly follow the strategy. This pi
 4. **Report** — Results delivered to Telegram so the human can make the final call
 
 This creates a feedback loop where the system continuously improves without blind trust in any single change.
+
+### Self-Validation Effectiveness (tracked live)
+
+The loop isn't theoretical — every change is tracked from "implemented" to
+"validated with data" by `scripts/validation_progress.py` (daily cron,
+silent unless something changes). Changes currently in the pipeline:
+
+| Change | Date | Post-change signals | Expected verdict |
+|---|---|---|---|
+| BUY_B RSI threshold 65 → 55 | 2026-08-25 | 16 logged, T+10 pending | week of Sep 7 |
+| BUY_B Vol Ratio < 2.0x filter | 2026-08-25 | 16 logged, T+10 pending | week of Sep 7 |
+| Crypto-proxy block (MSTR, COIN, MARA, …) | 2026-08-25 | 16 logged, T+10 pending | week of Sep 7 |
+
+The first keep/revert verdicts land the week of **Sep 7, 2026**, once 15+
+post-change signals complete their T+10 window. Full audit trail:
+[results/validation-progress-2026-08-28.md](results/validation-progress-2026-08-28.md).
 
 ---
 
