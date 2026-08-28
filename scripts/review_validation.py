@@ -53,7 +53,13 @@ def parse_signal_tracker(filepath):
         s = line.strip()
         if not s or not s.startswith("|"):
             continue
-        cols = [c.strip() for c in s.split('|') if c.strip()]
+        parts = s.split('|')
+        # Remove leading and trailing empty strings due to leading/trailing '|'
+        if parts and not parts[0]:
+            parts = parts[1:]
+        if parts and not parts[-1]:
+            parts = parts[:-1]
+        cols = [c.strip() for c in parts]
         if len(cols) < 15:
             continue
         res = parse_outcome(cols[14])
